@@ -8,10 +8,12 @@ export function AuthProvider({ children }) {
     const stored = localStorage.getItem('user');
     return stored ? JSON.parse(stored) : null;
   });
+
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
+
     if (token) {
       client.get('/auth/me')
         .then((res) => setUser(res.data))
@@ -26,22 +28,37 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  // ✅ LOGIN
   const login = async (email, password) => {
-    const { data } = await client.post('/auth/login', { email, password });
+    const { data } = await client.post('/auth/login', {
+      email,
+      password,
+    });
+
     localStorage.setItem('token', data.token);
     localStorage.setItem('user', JSON.stringify(data.user));
     setUser(data.user);
+
     return data.user;
   };
 
+  // ✅ REGISTER (FINAL FIX 🔥)
   const register = async (name, email, password, role) => {
-    const { data } = await client.post('/auth/register', { name, email, password, role });
+    const { data } = await client.post('/auth/register', {
+      name,
+      email,
+      password,
+      role,
+    });
+
     localStorage.setItem('token', data.token);
     localStorage.setItem('user', JSON.stringify(data.user));
     setUser(data.user);
+
     return data.user;
   };
 
+  // ✅ LOGOUT
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');

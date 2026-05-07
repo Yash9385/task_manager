@@ -1,11 +1,12 @@
 const router = require('express').Router();
+const mongoose = require('mongoose');
 const Project = require('../models/Project');
 const Task = require('../models/Task');
-const { protect, adminOnly } = require('../middleware/auth');
+const { protect } = require('../middleware/auth');
 
 router.use(protect);
 
-// Get all projects user is owner or member of
+// ================= GET ALL PROJECTS =================
 router.get('/', async (req, res) => {
   try {
     const projects = await Project.find({
@@ -16,20 +17,27 @@ router.get('/', async (req, res) => {
       .lean();
 
     const projectIds = projects.map((p) => p._id);
+
     const taskCounts = await Task.aggregate([
       { $match: { project: { $in: projectIds } } },
-      { $group: { _id: { project: '$project', status: '$status' }, count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: { project: '$project', status: '$status' },
+          count: { $sum: 1 },
+        },
+      },
     ]);
 
     const countMap = {};
     taskCounts.forEach(({ _id, count }) => {
-      if (!countMap[_id.project]) countMap[_id.project] = {};
-      countMap[_id.project][_id.status] = count;
+      const pid = _id.project.toString();
+      if (!countMap[pid]) countMap[pid] = {};
+      countMap[pid][_id.status] = count;
     });
 
     const result = projects.map((p) => ({
       ...p,
-      taskCounts: countMap[p._id] || {},
+      taskCounts: countMap[p._id.toString()] || {},
     }));
 
     res.json(result);
@@ -38,11 +46,15 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Create project (admin only)
-router.post('/', adminOnly, async (req, res) => {
+// ================= CREATE PROJECT =================
+// 🔥 FIXED HERE (adminOnly हटाया)
+router.post('/', async (req, res) => {
   try {
     const { name, description, status } = req.body;
-    if (!name) return res.status(400).json({ message: 'Name is required' });
+
+    if (!name) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
 
     const project = await Project.create({
       name,
@@ -51,14 +63,16 @@ router.post('/', adminOnly, async (req, res) => {
       owner: req.user._id,
       members: [req.user._id],
     });
+
     await project.populate('owner', 'name email');
+
     res.status(201).json(project);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// Get single project
+// ================= GET SINGLE PROJECT =================
 router.get('/:id', async (req, res) => {
   try {
     const project = await Project.findById(req.params.id)
@@ -70,6 +84,7 @@ router.get('/:id', async (req, res) => {
     const isMember =
       project.owner._id.equals(req.user._id) ||
       project.members.some((m) => m._id.equals(req.user._id));
+
     if (!isMember) return res.status(403).json({ message: 'Access denied' });
 
     res.json(project);
@@ -78,92 +93,65 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Update project (owner only)
+// ================= UPDATE PROJECT =================
 router.put('/:id', async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
+
     if (!project) return res.status(404).json({ message: 'Project not found' });
+
     if (!project.owner.equals(req.user._id)) {
       return res.status(403).json({ message: 'Only owner can update project' });
     }
+
     const { name, description, status } = req.body;
+
     if (name) project.name = name;
     if (description !== undefined) project.description = description;
     if (status) project.status = status;
+
     await project.save();
+
     await project.populate('owner', 'name email');
     await project.populate('members', 'name email role');
+
     res.json(project);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// Delete project (owner only)
+// ================= DELETE PROJECT =================
 router.delete('/:id', async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
+
     if (!project) return res.status(404).json({ message: 'Project not found' });
+
     if (!project.owner.equals(req.user._id)) {
       return res.status(403).json({ message: 'Only owner can delete project' });
     }
+
     await Task.deleteMany({ project: project._id });
     await project.deleteOne();
+
     res.json({ message: 'Project deleted' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// Add member
-router.post('/:id/members', async (req, res) => {
-  try {
-    const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: 'Project not found' });
-    if (!project.owner.equals(req.user._id)) {
-      return res.status(403).json({ message: 'Only owner can add members' });
-    }
-    const { userId } = req.body;
-    if (!userId) return res.status(400).json({ message: 'userId required' });
-    if (project.members.includes(userId)) {
-      return res.status(400).json({ message: 'User already a member' });
-    }
-    project.members.push(userId);
-    await project.save();
-    await project.populate('members', 'name email role');
-    res.json(project.members);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// Remove member
-router.delete('/:id/members/:userId', async (req, res) => {
-  try {
-    const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: 'Project not found' });
-    if (!project.owner.equals(req.user._id)) {
-      return res.status(403).json({ message: 'Only owner can remove members' });
-    }
-    if (project.owner.equals(req.params.userId)) {
-      return res.status(400).json({ message: 'Cannot remove project owner' });
-    }
-    project.members = project.members.filter((m) => !m.equals(req.params.userId));
-    await project.save();
-    res.json({ message: 'Member removed' });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// Get tasks for a project
+// ================= GET PROJECT TASKS =================
 router.get('/:id/tasks', async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
+
     if (!project) return res.status(404).json({ message: 'Project not found' });
 
     const isMember =
-      project.owner.equals(req.user._id) || project.members.includes(req.user._id);
+      project.owner.equals(req.user._id) ||
+      project.members.some((m) => m.equals(req.user._id));
+
     if (!isMember) return res.status(403).json({ message: 'Access denied' });
 
     const tasks = await Task.find({ project: req.params.id })
